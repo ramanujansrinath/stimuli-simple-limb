@@ -1,4 +1,4 @@
-# stimuli-simple-limb
+# Abstract 3D Single Limb Shapes
 
 MATLAB code for generating simple, parametric 3D "limb" stimuli: curved tubes whose cross-sections are irregular, sometimes concave polygons. Each shape is defined by a few interpretable parameters (axis curvature, cross-section complexity, twist, thickness profile), so shape properties can be varied independently or randomized. Shapes can be rendered alone or placed on a bumpy ground plane with floating "snow" particles for extra 3D context cues.
 
