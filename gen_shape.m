@@ -1,5 +1,57 @@
-function shape = gen_shape(params,varargin)    
+% GEN_SHAPE  Generate a 3D "limb" shape: a curved tube with a lumpy cross-section.
+%
+%   shape = gen_shape()                     - fully random shape
+%   shape = gen_shape([], 'name',value,...) - random, with some params fixed
+%   shape = gen_shape(params)               - rebuild/modify from a saved
+%                                             shape.params struct
+%
+%   Construction
+%     1. A curved medial axis (circular arc) of length maLen and curvature
+%        maCurv is sampled at ma.pts (31) points  (getCurvedAxis).
+%     2. A random irregular, possibly concave 2D outline (gen_shape_2d,
+%        irregularity set by surfComp) is the cross-section.
+%     3. At each axis point the cross-section is twisted (angle ramps from
+%        0 to surfTwist along the axis), scaled in x and y by a radius
+%        profile that tapers to zero at both ends (getRadProf), rotated to
+%        be perpendicular to the axis, and placed on the axis (makeShape).
+%     4. Consecutive rings are joined into a triangle mesh, the whole shape
+%        is scaled, rotated and positioned, and the mesh is optionally
+%        smoothed.
+%
+%   Optional name/value inputs (all default to a random draw)
+%     Global
+%       stimColor  - [r g b] surface colour (default: getColor, random)
+%       stimGloss  - specular strength, 0-1
+%       stimOri    - [rx ry rz] rotation (rad) applied to the finished shape
+%       stimSize   - overall scale factor, 0-1
+%       stimPos    - [x y z] position offset
+%     Medial axis
+%       maCurv     - axis curvature (1/radius); 0 gives a straight axis
+%       maLen      - axis arc length
+%       maJunc     - [x y z] point to translate the axis start to (for
+%                    attaching limbs at a junction); [] = unused
+%     Surface
+%       surfComp   - cross-section complexity (0-1)
+%       surfTwist  - total twist along the axis, 0-pi rad
+%       surfThkns  - 1x3 interior values of the width profile (see
+%                    getRadProfXY)
+%       surfProf   - explicit N x 2 [x-radius y-radius] profile, overriding
+%                    surfThkns (N must equal ma.pts)
+%       surfSmooth - true (default) to smooth the mesh (smoothVert)
+%
+%   Output struct
+%       shape.vert   - V x 3 mesh vertices
+%       shape.face   - F x 3 triangle indices into vert
+%       shape.axis   - M x 3 medial axis in the same final coordinates
+%       shape.params - everything needed to regenerate the shape; pass it
+%                      back in to gen_shape to reproduce it, or edit fields
+%                      (e.g. params.ma.curve) first to change that property
+%
+%   See also gen_stim, disp_shape, gen_shape_2d.
+function shape = gen_shape(params,varargin)
     if ~exist('params','var'); params = []; end
+    % parse optional inputs; defaults are evaluated once per call, so each
+    % random default is a fresh draw
     p =  inputParser;
     addOptional(p,'stimColor',getColor); % @(x) length(x)==3 && sum(x>1)==0
     addOptional(p,'stimGloss',0.001+0.7*rand,@(x) isnumeric(x) && isscalar(x) && (x > 0) && (x < 1));
@@ -36,6 +88,7 @@ function shape = gen_shape(params,varargin)
     surfProf = p.Results.surfProf;
     surfSmooth = p.Results.surfSmooth;
     
+    % new shape: build the parameter struct from the (random) options above
     if isempty(params)
         % medial axis
         params.ma.pts = 31;
@@ -56,6 +109,8 @@ function shape = gen_shape(params,varargin)
         params.surface.doSmooth = surfSmooth;
 
         % global
+        % light sits on a circle of radius 10 in the x-z plane, 5 above it,
+        % at a random x position in front of the shape (z > 0)
         params.pos = stimPos;
         params.rot = stimOri; % [pi.*rand (pi/2-pi/8)+(pi/4*rand) pi.*rand];
         params.size = stimSize;
@@ -64,6 +119,8 @@ function shape = gen_shape(params,varargin)
         tt = -10 + 20*rand;
         params.light = [tt; 5; sqrt(100-(tt.^2))];
     else
+        % existing shape: recompute axis and radius profile from the
+        % (possibly edited) params
         params.ma.axis = getCurvedAxis(params.ma);
         % todo: what if radprofXY is changed but radprof exists? then
         % radprof doesn't change. Fix this;
@@ -79,14 +136,35 @@ function shape = gen_shape(params,varargin)
     shape.params = params;
 end
 
+% MAKESHAPE  Turn a params struct into mesh vertices, faces and axis.
+%
+%   [vert, face, ax] = makeShape(params)
+%
+%   Vertex layout: vertex 1 is the apex of the start cap, then one ring of
+%   nCsPts vertices for each interior axis point (2..ma.pts-1), then the
+%   apex of the end cap as the last vertex. The first and last cross-
+%   sections are collapsed to single points (the radius profile is zero
+%   there), so nVert = nCsPts*(ma.pts-2) + 2.
+%
+%   Face topology depends only on ma.pts and the number of cross-section
+%   points, so it is computed once and cached in export/face_<ma.pts>.txt
+%   (delete the file if either changes). Faces are triangle fans at the two
+%   caps and two triangles per quad between adjacent rings.
+%
+%   After meshing, the shape is centred on its bounding box, scaled by
+%   params.size, rotated by params.rot, translated to params.pos (or to
+%   params.ma.junction if set) and optionally smoothed. ax is transformed
+%   identically so it stays aligned with the mesh (smoothing excepted).
 function [vert,face,ax] = makeShape(params)
     cs = params.surface.cs.dPts;
     nCsPts = size(cs,1);
     nVert = size(cs,1)*params.ma.pts - nCsPts+1 - nCsPts+1;
-    
+
     vert = nan(nVert,3);
-    
+
     % vert - assemble cs
+    % for each axis point: twist -> scale by radius profile -> rotate to the
+    % local axis direction -> move onto the axis
     for ii=1:params.ma.pts
         csspin = movePts(cs,0,0,1,rad2deg(params.surface.twistProf(ii)),[0 0]);
         cssc = [csspin(:,1).*params.surface.radProf(ii,1) csspin(:,2).*params.surface.radProf(ii,2) zeros(nCsPts,1)]; % scale
@@ -95,6 +173,7 @@ function [vert,face,ax] = makeShape(params)
         
         sec =  csrot + repmat(pos,nCsPts,1); % shift
 
+        % end rings have zero radius, so a single point stands in for them
         if ii==1
             vert(1,:) = sec(1,:);
         elseif ii==params.ma.pts
@@ -106,11 +185,13 @@ function [vert,face,ax] = makeShape(params)
         % plot3(vert(:,1),vert(:,2),vert(:,3),'r.'); 
         % axis equal; axis off; set(gca,'XLim',[-2 2]); view(-14,-14);
     end
+    % centre mesh (and axis) on the bounding box of the mesh
     ax = params.ma.axis.pos;
     ax = ax - repmat((min(vert)+max(vert))/2,size(ax,1),1);
     vert = vert - repmat((min(vert)+max(vert))/2,nVert,1);
     vert = round(vert,4);
 
+    % faces: load cached topology, or build and cache it on first use
     filepath = fileparts(mfilename('fullpath'));
     facepath = [filepath '/export/face_' num2str(params.ma.pts) '.txt'];
     if ~exist(facepath,'file')
@@ -121,7 +202,8 @@ function [vert,face,ax] = makeShape(params)
         end
         face(end,3) = 2;
 
-        % face - middle
+        % face - middle: stitch ring ii to ring ii+1 with two triangles per
+        % quad, wrapping the last point of a ring back to its first
         for ii=2:params.ma.pts-2
             thisRow = 2+(ii-2)*nCsPts : 1+(ii-1)*nCsPts;
             nextRow = 2+(ii-1)*nCsPts : 1+ii*nCsPts;
@@ -153,6 +235,7 @@ function [vert,face,ax] = makeShape(params)
         face = readmatrix(facepath);
     end
     
+    % global transform: scale -> rotate -> translate
     ax =  ax .* params.size;
     ax = rotvert(ax,params.rot);
     ax =  ax + repmat(params.pos,size(ax,1),1);
@@ -161,7 +244,8 @@ function [vert,face,ax] = makeShape(params)
     vert = rotvert(vert,params.rot);
     vert =  vert + repmat(params.pos,size(vert,1),1);
     
-    % translate to junction point
+    % translate to junction point: move the shape so the axis start sits on
+    % the requested junction (used to attach this limb to another)
     if ~isempty(params.ma.junction)
         pos = params.ma.junction - ax(1,:);
         ax =  ax + repmat(pos,size(ax,1),1);
@@ -173,6 +257,12 @@ function [vert,face,ax] = makeShape(params)
     end
 end
 
+% SMOOTHVERT  Laplacian-style mesh smoothing.
+%   Runs 20 passes; in each pass every vertex is replaced by the mean of
+%   its mesh neighbours (vertices sharing a face; the vertex itself is not
+%   included). This rounds off sharp ridges from the cross-section and
+%   removes the faceting between rings. Neighbour lists are computed once
+%   and cached across passes. Smoothing also shrinks the mesh slightly.
 function vert = smoothVert(vert,face)
     neigh = cell(size(vert,1),1);
     for smoothTimes=1:20
@@ -191,6 +281,9 @@ function vert = smoothVert(vert,face)
     end
 end
 
+% ROTVERT  Rotate N x 3 row-vector points by Euler angles (radians).
+%   rot = [rx ry rz]; rotations are applied in the order x, then y, then z
+%   using row-vector (post-multiply) convention.
 function vert = rotvert(vert,rot)
     rx = [1 0 0; 0 cos(rot(1)) -sin(rot(1)); 0 sin(rot(1)) cos(rot(1))];
     ry = [cos(rot(2)) 0 sin(rot(2)); 0 1 0; -sin(rot(2)) 0 cos(rot(2))];
@@ -201,6 +294,11 @@ function vert = rotvert(vert,rot)
     vert = vert * rz;
 end
 
+% GETRADPROFXY  Control points [position width] for the radius profile.
+%   Positions along the axis (0-1) are five values: 0, three jittered
+%   interior positions, and 1. Widths are 0 at both ends and the three
+%   surfThkns values in between, so the limb tapers to a point at each end.
+%   If surfThkns is already a 5-row array it is returned unchanged.
 function radProfXY = getRadProfXY(surfThkns)
     if size(surfThkns,1) == 5
         radProfXY = surfThkns;
@@ -211,6 +309,18 @@ function radProfXY = getRadProfXY(surfThkns)
     end
 end
 
+% GETRADPROF  Per-axis-point cross-section scale factors.
+%
+%   [rProf, cPts] = getRadProf(nPts, surfThkns, surfProf)
+%
+%   Spline-interpolates the control points from getRadProfXY to nPts
+%   samples along the axis, retrying (up to 100 times) if the spline dips
+%   below zero. Column 1 of rProf scales the cross-section in x; column 2
+%   scales it in y by a random factor of 0.5-2, giving an elliptical
+%   aspect ratio that is the same at every point along the limb.
+%   If surfProf is supplied it is returned directly (cPts empty).
+%       rProf - nPts x 2 scale factors
+%       cPts  - the control points used (stored so the profile can be edited)
 function [rProf,cPts] = getRadProf(nPts,surfThkns,surfProf)
     if ~isempty(surfProf)
         rProf = surfProf;
@@ -241,6 +351,19 @@ function [rProf,cPts] = getRadProf(nPts,surfThkns,surfProf)
     rProf = round(rProf,4);
 end
     
+% GETCURVEDAXIS  Sample the circular-arc medial axis.
+%
+%   ax = getCurvedAxis(ma)   with ma.length, ma.curve, ma.pts
+%
+%   The arc has radius 1/curve and arc length ma.length (a curve of 0 uses a
+%   huge radius, giving a near-straight axis). It lies in the y-z plane
+%   (x = 0), is symmetric about its midpoint and is shifted so its highest
+%   point is at y = 0. A point is added past the end to get the tangent at
+%   the last sample.
+%       ax.pos - pts x 3 axis positions
+%       ax.tan - pts x 3 unit tangent vectors
+%       ax.ang - pts x 1 rotation about x (rad) that turns the cross-section
+%                plane to be perpendicular to the axis at each point
 function ax = getCurvedAxis(ma)
     len = ma.length;
     curve = ma.curve;

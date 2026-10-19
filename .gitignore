@@ -1,4 +1,13 @@
-dep/geom2d
+# macOS
 .DS_Store
-dep/.DS_Store
-export/.DS_Store
+
+# MATLAB
+*.asv
+*.autosave
+*.m~
+*.mex*
+slprj/
+octave-workspace
+
+# External dependency (geom2d toolbox) -- download separately, see README
+dep/geom2d/

@@ -26,6 +26,18 @@
 % subplot(212);plot(mean(col,2))
 
 %%
+% GETCOLOR  Pick a stimulus colour from a fixed 27-colour palette.
+%
+%   col = getColor()                 - random colour (index 1-26)
+%   col = getColor('idx',k)          - palette entry k (1-27) -> 1x3 RGB
+%   col = getColor('range',[a b n])  - n colours linearly interpolated in
+%                                      RGB between palette entries a and b
+%                                      -> n x 3 RGB
+%
+%   The palette is every combination of R,G,B in {1, 0.7, 0.4} (3^3 = 27),
+%   sorted by mean brightness, so index 1 is darkest and 27 is white. This
+%   gives colours that differ in hue/saturation across a controlled range
+%   of luminance. Used by gen_shape for the default surface colour.
 function col = getColor(varargin)
     p =  inputParser;
     addOptional(p,'range',[],@(x) length(x)==3 && sum(x(1:2)>28)==0);
@@ -69,6 +81,9 @@ function col = getColor(varargin)
     end
 end
 
+% GETALLCOLS  Build the 27 x 3 palette, sorted from darkest to brightest.
+%   dec2base(0:26,3) enumerates all 3-digit base-3 numbers; each digit
+%   (+1) indexes into base = [1 0.7 0.4] to give one channel level.
 function cols = getAllCols
     a = dec2base(0:26,3);
     cols = nan(27,3);
